@@ -12,7 +12,7 @@ Create your local .env file from the example template:
 
 Bash
 cp .env.example .env
-Ensure .env matches your running backend endpoints:
+Ensure .env matches your running backend endpoints also paste the pool id and client id what you got after running setup_cognito commnand
 
 3. Start Development Server
 
