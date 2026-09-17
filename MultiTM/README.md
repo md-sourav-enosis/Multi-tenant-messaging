@@ -14,7 +14,7 @@ Auth is JWT from MiniStack (local Cognito on port `4566`). Django does not have 
 
 You only need Docker and Docker Compose. Config is in `.env` at the project root.
 
-1. Start everything: First copy the .env.example and make a new file named .env, paste everything from .env.example. Then Enter your DB password and then run below command.
+1. Start everything: First copy the .env.example and make a new file named .env & paste everything from .env.example. Then Enter your DB password and then run below command.
 
 ```bash
 docker compose up -d
