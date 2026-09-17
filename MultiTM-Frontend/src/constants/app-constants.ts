@@ -1,0 +1,3 @@
+export const APP_CONSTANTS = {
+  API_CALL_TIMEOUT: 15000,
+};

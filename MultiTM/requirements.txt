@@ -1,0 +1,12 @@
+Django==6.1.1
+djangorestframework==3.18.0
+django-redis==7.0.0
+redis==5.2.1
+boto3==1.43.89
+python-dotenv==1.0.1
+django-cognito-jwt==0.0.4
+psycopg[binary]==3.2.1
+celery==5.4.0
+channels[daphne]==4.2.0
+channels-redis==4.2.0
+django-cors-headers==4.7.0

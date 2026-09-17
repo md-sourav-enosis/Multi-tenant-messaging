@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Messaging</title>
+        <style>
+            :root {
+                font-family: system-ui, sans-serif;
+                color: #17202a;
+                background: #f4f6f8;
+            }
+            body {
+                margin: 0;
+            }
+            main {
+                max-width: 1100px;
+                margin: 32px auto;
+                padding: 0 16px;
+            }
+            .layout {
+                display: grid;
+                grid-template-columns: 320px 1fr;
+                gap: 16px;
+            }
+            section {
+                background: #fff;
+                border: 1px solid #dce2e8;
+                border-radius: 8px;
+                padding: 18px;
+            }
+            form {
+                display: flex;
+                gap: 8px;
+            }
+            input,
+            button {
+                font: inherit;
+                padding: 9px 11px;
+                border: 1px solid #c8d0d8;
+                border-radius: 5px;
+            }
+            input {
+                flex: 1;
+                min-width: 0;
+            }
+            button {
+                cursor: pointer;
+                background: #1769aa;
+                color: white;
+                border-color: #1769aa;
+            }
+            ul {
+                list-style: none;
+                padding: 0;
+                margin: 12px 0 0;
+            }
+            li {
+                border-top: 1px solid #edf0f2;
+                padding: 12px 0;
+            }
+            li button {
+                width: 100%;
+                text-align: left;
+                background: transparent;
+                color: #17202a;
+                border: 0;
+                padding: 4px 0;
+            }
+            li button.active {
+                color: #1769aa;
+                font-weight: 700;
+            }
+            .conversation-row {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            .conversation-row button {
+                flex: 1;
+            }
+            .unread-count {
+                min-width: 20px;
+                padding: 2px 6px;
+                border-radius: 10px;
+                background: #1769aa;
+                color: white;
+                font-size: 12px;
+                text-align: center;
+            }
+            small {
+                display: block;
+                color: #68737d;
+                margin-top: 3px;
+            }
+            #status {
+                min-height: 1.4em;
+                color: #68737d;
+            }
+            .error {
+                color: #b42318 !important;
+            }
+            #messages {
+                min-height: 360px;
+                max-height: 55vh;
+                overflow-y: auto;
+            }
+            .message {
+                border-top: 1px solid #edf0f2;
+                padding: 10px 0;
+            }
+            .message p {
+                margin: 4px 0 0;
+                white-space: pre-wrap;
+            }
+            .empty {
+                color: #68737d;
+            }
+            @media (max-width: 720px) {
+                .layout {
+                    grid-template-columns: 1fr;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <main>
+            <h1>Messaging</h1>
+            <button id="export-button" type="button">Export conversations</button>
+            <p id="export-status" role="status"></p>
+            <p id="status" role="status"></p>
+            <div class="layout">
+                <section>
+                    <h2>Find a user</h2>
+                    <form id="search-form">
+                        <input
+                            id="query"
+                            minlength="2"
+                            placeholder="Name or email"
+                            autocomplete="off"
+                        />
+                        <button type="submit">Search</button>
+                    </form>
+                    <ul id="results"></ul>
+                    <h2>Inbox</h2>
+                    <ul id="inbox">
+                        <li class="empty">Loading conversations...</li>
+                    </ul>
+                </section>
+                <section>
+                    <h2 id="conversation-title">Select a conversation</h2>
+                    <div id="messages">
+                        <p class="empty">
+                            Choose a conversation to start chatting.
+                        </p>
+                    </div>
+                    <form id="message-form" hidden>
+                        <input
+                            id="message-input"
+                            placeholder="Write a message"
+                            autocomplete="off"
+                        />
+                        <button type="submit">Send</button>
+                    </form>
+                </section>
+            </div>
+        </main>
+        <script>
+            const token = () =>
+                localStorage.getItem("access_token") ||
+                localStorage.getItem("id_token");
+            const authHeaders = () =>
+                token() ? { Authorization: `Bearer ${token()}` } : {};
+            const status = document.querySelector("#status");
+            const results = document.querySelector("#results");
+            const inbox = document.querySelector("#inbox");
+            const messages = document.querySelector("#messages");
+            const messageForm = document.querySelector("#message-form");
+            const messageInput = document.querySelector("#message-input");
+            const exportButton = document.querySelector("#export-button");
+            const exportStatus = document.querySelector("#export-status");
+            let selectedId = null;
+            let socket = null;
+            let inboxSocket = null;
+            let knownMessageIds = new Set();
+            let inboxConversations = [];
+
+            function showStatus(text, error = false) {
+                status.textContent = text;
+                status.className = error ? "error" : "";
+            }
+
+            async function api(path, options = {}) {
+                const response = await fetch(path, {
+                    ...options,
+                    headers: { ...authHeaders(), ...(options.headers || {}) },
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok)
+                    throw new Error(
+                        data.detail || `Request failed (${response.status})`,
+                    );
+                return data;
+            }
+
+            function participantName(conversation) {
+                return conversation.participants
+                    .map((item) => item.display_name)
+                    .join(" and ");
+            }
+
+            function renderInbox(conversations) {
+                inbox.replaceChildren();
+                if (!conversations.length) {
+                    const empty = document.createElement("li");
+                    empty.className = "empty";
+                    empty.textContent = "No conversations yet.";
+                    inbox.append(empty);
+                    return;
+                }
+                conversations.forEach((conversation) => {
+                    const item = document.createElement("li");
+                    const row = document.createElement("div");
+                    row.className = "conversation-row";
+                    const button = document.createElement("button");
+                    button.className =
+                        conversation.id === selectedId ? "active" : "";
+                    button.textContent = participantName(conversation);
+                    const preview = document.createElement("small");
+                    preview.textContent =
+                        conversation.last_message?.text || "No messages yet";
+                    button.append(preview);
+                    button.addEventListener("click", () =>
+                        openConversation(conversation.id),
+                    );
+                    row.append(button);
+                    if (conversation.unread_count > 0) {
+                        const unreadCount = document.createElement("span");
+                        unreadCount.className = "unread-count";
+                        unreadCount.textContent = conversation.unread_count;
+                        unreadCount.setAttribute(
+                            "aria-label",
+                            `${conversation.unread_count} unread messages`,
+                        );
+                        row.append(unreadCount);
+                    }
+                    item.append(row);
+                    inbox.append(item);
+                });
+            }
+
+            function appendMessage(message) {
+                if (knownMessageIds.has(message.id)) return;
+                knownMessageIds.add(message.id);
+                const item = document.createElement("article");
+                item.className = "message";
+                const sender = document.createElement("strong");
+                sender.textContent = message.sender_name;
+                const text = document.createElement("p");
+                text.textContent = message.text;
+                item.append(sender, text);
+                messages.append(item);
+                messages.scrollTop = messages.scrollHeight;
+            }
+
+            async function loadInbox() {
+                try {
+                    inboxConversations = await api("/api/chat/inbox/");
+                    renderInbox(inboxConversations);
+                } catch (error) {
+                    showStatus(error.message, true);
+                }
+            }
+
+            function applyInboxUpdate(conversation) {
+                const existingIndex = inboxConversations.findIndex(
+                    (item) => item.id === conversation.id,
+                );
+                if (existingIndex === -1) {
+                    inboxConversations.push(conversation);
+                } else {
+                    inboxConversations[existingIndex] = conversation;
+                }
+                inboxConversations.sort(
+                    (first, second) =>
+                        new Date(second.updated_at) -
+                        new Date(first.updated_at),
+                );
+                renderInbox(inboxConversations);
+            }
+
+            function connectInboxSocket() {
+                const protocol = location.protocol === "https:" ? "wss" : "ws";
+                const socketUrl = `${protocol}://${location.host}/ws/chat/inbox/?token=${encodeURIComponent(token() || "")}`;
+                inboxSocket = new WebSocket(socketUrl);
+                inboxSocket.onmessage = async (event) => {
+                    const data = JSON.parse(event.data);
+                    if (data.type === "inbox_update" && data.conversation) {
+                        applyInboxUpdate(data.conversation);
+                    } else if (data.type === "inbox_update") {
+                        await loadInbox();
+                    }
+                };
+                inboxSocket.onclose = () => {
+                    setTimeout(connectInboxSocket, 2000);
+                };
+            }
+
+            async function openConversation(id) {
+                selectedId = id;
+                if (socket) socket.close();
+                knownMessageIds = new Set();
+                try {
+                    const conversation = await api(
+                        `/api/chat/conversations/${id}/`,
+                    );
+                    document.querySelector("#conversation-title").textContent =
+                        participantName(conversation);
+                    messages.replaceChildren();
+                    const history = await api(
+                        `/api/chat/conversations/${id}/messages/`,
+                    );
+                    history.forEach(appendMessage);
+                    messageForm.hidden = false;
+                    await api(`/api/chat/conversations/${id}/read/`, {
+                        method: "POST",
+                    });
+                    const protocol =
+                        location.protocol === "https:" ? "wss" : "ws";
+                    const socketUrl = `${protocol}://${location.host}/ws/chat/${id}/?token=${encodeURIComponent(token() || "")}`;
+                    socket = new WebSocket(socketUrl);
+                    socket.onopen = () => showStatus("Connected");
+                    socket.onmessage = (event) => {
+                        const data = JSON.parse(event.data);
+                        if (data.type === "message") appendMessage(data);
+                    };
+                    socket.onerror = () =>
+                        showStatus("WebSocket connection failed.", true);
+                    socket.onclose = (event) => {
+                        if (event.code !== 1000)
+                            showStatus(
+                                `Conversation disconnected (${event.code}).`,
+                                true,
+                            );
+                    };
+                    renderInbox(await api("/api/chat/inbox/"));
+                } catch (error) {
+                    showStatus(error.message, true);
+                }
+            }
+
+            document
+                .querySelector("#search-form")
+                .addEventListener("submit", async (event) => {
+                    event.preventDefault();
+                    const query = document.querySelector("#query").value.trim();
+                    if (query.length < 2) return;
+                    try {
+                        const users = await api(
+                            `/api/chat/users/?q=${encodeURIComponent(query)}`,
+                        );
+                        results.replaceChildren();
+                        users.forEach((user) => {
+                            const item = document.createElement("li");
+                            const button = document.createElement("button");
+                            button.textContent = `${user.display_name} (${user.tenant_name})`;
+                            button.addEventListener("click", async () => {
+                                const conversation = await api(
+                                    "/api/chat/conversations/",
+                                    {
+                                        method: "POST",
+                                        headers: {
+                                            "Content-Type": "application/json",
+                                        },
+                                        body: JSON.stringify({
+                                            user_id: user.id,
+                                        }),
+                                    },
+                                );
+                                await loadInbox();
+                                await openConversation(conversation.id);
+                            });
+                            item.append(button);
+                            results.append(item);
+                        });
+                    } catch (error) {
+                        showStatus(error.message, true);
+                    }
+                });
+
+            messageForm.addEventListener("submit", (event) => {
+                event.preventDefault();
+                const text = messageInput.value.trim();
+                if (socket?.readyState === WebSocket.OPEN && text) {
+                    socket.send(JSON.stringify({ text }));
+                    messageInput.value = "";
+                }
+            });
+
+            async function requestExport() {
+                exportButton.disabled = true;
+                exportStatus.textContent = "Preparing export...";
+                try {
+                    const task = await api("/api/chat/exports/", { method: "POST" });
+                    let completed = false;
+                    while (!completed) {
+                        await new Promise((resolve) => setTimeout(resolve, 1000));
+                        const result = await api(task.status_url);
+                        if (result.status === "SUCCESS") {
+                            completed = true;
+                            const response = await fetch(result.download_url, {
+                                headers: authHeaders(),
+                            });
+                            if (!response.ok) {
+                                throw new Error("The export download failed.");
+                            }
+                            const blob = await response.blob();
+                            const link = document.createElement("a");
+                            link.href = URL.createObjectURL(blob);
+                            link.download = "conversations.json";
+                            link.click();
+                            URL.revokeObjectURL(link.href);
+                            exportStatus.textContent = "Export downloaded.";
+                        } else if (result.status === "FAILURE") {
+                            throw new Error(result.detail || "Export failed.");
+                        }
+                    }
+                } catch (error) {
+                    exportStatus.textContent = error.message;
+                } finally {
+                    exportButton.disabled = false;
+                }
+            }
+
+            exportButton.addEventListener("click", requestExport);
+
+            window.addEventListener("focus", loadInbox);
+            document.addEventListener("visibilitychange", () => {
+                if (document.visibilityState === "visible") loadInbox();
+            });
+
+            loadInbox();
+            connectInboxSocket();
+        </script>
+    </body>
+</html>
